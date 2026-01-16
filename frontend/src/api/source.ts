@@ -40,5 +40,12 @@ export const sourceApi = {
   // 测试源
   test(id: string) {
     return api.post(`/sources/${id}/test`).then(res => res.data)
+  },
+
+  // 新增：从 URL 导入源内容
+  importFromUrl(url: string) {
+    return api.get('/sources/import-url', {
+      params: { url }
+    }).then(res => res.data)
   }
 }
