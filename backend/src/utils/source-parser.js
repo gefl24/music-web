@@ -14,7 +14,7 @@ class SourceParser {
     const self = this;
     const lxContext = {
       _handlers: {},
-      version: '2.0.0', // 模拟较高的版本号以兼容新脚本
+      version: '2.0.0', // 伪装成较新版本以兼容脚本
       env: 'mobile',
       currentScriptInfo: { name: 'Custom Source', version: '1.0.0' },
       EVENT_NAMES: { request: 'request', inited: 'inited', updateAlert: 'updateAlert' },
@@ -41,22 +41,17 @@ class SourceParser {
             return Buffer.isBuffer(buf) ? buf.toString(encoding) : Buffer.from(buf).toString(encoding);
           }
         },
-        // 添加 zlib 支持 (部分脚本可能需要，虽然 axios 自动处理了)
+        // 部分脚本可能需要 zlib，做个简单的兼容
         zlib: {
-           inflate: (buf, cb) => {
-             // 简易实现，通常 axios 已经解压了，这里留空或简单返回
-             if(cb) cb(null, buf); 
-           }
+           inflate: (buf, cb) => { if(cb) cb(null, buf); }
         }
       },
       crypto: {
         md5: (text) => crypto.createHash('md5').update(text).digest('hex'),
-        // 修复：添加随机字节生成
         randomBytes: (size) => crypto.randomBytes(size),
-        // 修复：实现 AES 加密 (QQ音乐/酷狗等必需)
+        // 【关键修复】实现 AES 加密 (QQ/酷狗等源必需)
         aesEncrypt: (buffer, mode, key, iv) => {
           try {
-             // 确保 key 和 iv 是 Buffer 或正确格式
              const cipher = crypto.createCipheriv(mode, key, iv);
              const input = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
              return Buffer.concat([cipher.update(input), cipher.final()]);
@@ -65,11 +60,11 @@ class SourceParser {
              return Buffer.alloc(0);
           }
         },
-        // 修复：实现 RSA 加密 (网易云必需)
+        // 【关键修复】实现 RSA 加密 (网易云源必需)
         rsaEncrypt: (buffer, key, label) => {
           try {
             const input = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-            // 简单处理 key 格式
+            // 自动补全 PEM 头，防止 key 格式错误
             const pubKey = key.includes('-----BEGIN') ? key : `-----BEGIN PUBLIC KEY-----\n${key}\n-----END PUBLIC KEY-----`;
             return crypto.publicEncrypt({
               key: pubKey,
@@ -104,16 +99,15 @@ class SourceParser {
         method: options.method || 'GET',
         headers: options.headers || {},
         timeout: 15000,
-        // 关键：强制接收二进制数据，方便脚本后续处理编码
+        // 强制接收二进制数据，交给脚本处理编码，防止乱码
         responseType: options.binary ? 'arraybuffer' : (options.responseType || 'json'),
         validateStatus: () => true,
       };
       
       if (options.body) config.data = options.body;
       if (options.form) config.data = options.form;
-      if (options.formData) config.data = options.formData;
-
-      // 模拟请求头，防止被反爬
+      
+      // 模拟 Chrome UA，防止被拦截
       config.headers['User-Agent'] = config.headers['User-Agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
       
       const response = await axios(config);
@@ -144,7 +138,6 @@ class SourceParser {
   async waitForHandler() {
     const start = Date.now();
     while (Date.now() - start < 3000) {
-      // 检查 request 处理器是否已注册
       if (this.vm.run(`!!(lx._handlers && lx._handlers['request'])`)) return true;
       await new Promise(r => setTimeout(r, 200));
     }
@@ -155,19 +148,20 @@ class SourceParser {
     if (!this.vm) await this.validate();
     await this.waitForHandler();
 
+    // 动作映射
     const actionMap = {
       'search': 'musicSearch',
       'getMusicUrl': 'musicUrl',
-      'getTopListDetail': 'board',
+      'getTopListDetail': 'board', // 排行榜详情动作通常是 board
       'getLyric': 'lyric',
       'getPic': 'pic'
     };
     
     const action = actionMap[method] || method;
-    // 确保排行榜 ID 传递正确
+    // 构造基本参数
     const fullParams = { page: 1, limit: 30, type: 'music', ...params };
     
-    // 如果是排行榜，LX 协议通常期望 info 中直接包含 id
+    // 排行榜特殊处理：把 params.id 传给 info.id
     if (method === 'getTopListDetail' && params.id) {
         fullParams.id = params.id;
     }
@@ -176,18 +170,14 @@ class SourceParser {
       (async () => {
         try {
           if (lx._handlers && typeof lx._handlers['request'] === 'function') {
-             // 构造 source 对象
-             // 注意：_is_built_in 设为 false，更符合自定义源行为
+             // 关键：构造 source 对象传给脚本，指明目标平台(如 wy, tx)
+             // _is_built_in: false 表示这是一个外部请求
              const source = { id: '${targetSource}', name: '${targetSource}', _is_built_in: false };
              return await lx._handlers['request']({ 
                  action: '${action}', 
                  source: source, 
                  info: ${JSON.stringify(fullParams)} 
              });
-          }
-          // 兼容旧式写法
-          if (typeof ${method} === 'function') {
-            return await ${method}(${JSON.stringify(fullParams)});
           }
         } catch (err) {
           return { error: err.message, _scriptError: true };
@@ -201,19 +191,16 @@ class SourceParser {
     return res;
   }
 
-  search(keyword, page, limit) { return this.execute('search', { keyword, page, limit }, 'all'); }
-  
-  getMusicUrl(musicInfo) { 
-      // 必须传递正确的 source ID
-      return this.execute('getMusicUrl', { musicInfo, type: '128k' }, musicInfo.source); 
-  }
-  
-  getLyric(musicInfo) { return this.execute('getLyric', { musicInfo }, musicInfo.source); }
-  getPic(musicInfo) { return this.execute('getPic', { musicInfo }, musicInfo.source); }
-  
+  // 这里的 sourceId 就是 wy, tx 等
   getTopListDetail(sourceId, topListId, page, limit) {
     return this.execute('getTopListDetail', { id: topListId, page, limit }, sourceId);
   }
+  
+  // 其他方法包装
+  search(keyword, page, limit) { return this.execute('search', { keyword, page, limit }, 'all'); }
+  getMusicUrl(musicInfo) { return this.execute('getMusicUrl', { musicInfo, type: '128k' }, musicInfo.source); }
+  getLyric(musicInfo) { return this.execute('getLyric', { musicInfo }, musicInfo.source); }
+  getPic(musicInfo) { return this.execute('getPic', { musicInfo }, musicInfo.source); }
 }
 
 module.exports = SourceParser;
