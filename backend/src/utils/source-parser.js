@@ -44,7 +44,7 @@ class SourceParser {
         md5: (text) => crypto.createHash('md5').update(text).digest('hex'),
         base64Encode: (text) => Buffer.from(text).toString('base64'),
         base64Decode: (text) => Buffer.from(text, 'base64').toString('utf-8'),
-        aesEncrypt: () => '', 
+        aesEncrypt: () => '',
       },
       data: { set: () => {}, get: () => null }
     };
@@ -70,7 +70,6 @@ class SourceParser {
       };
       if (options.body) config.data = options.body;
       if (options.form) config.data = options.form;
-      // 模拟移动端 UA，提高成功率
       config.headers['User-Agent'] = 'Mozilla/5.0 (Linux; Android 10; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36';
       
       const response = await axios(config);
@@ -106,16 +105,16 @@ class SourceParser {
     return false;
   }
 
-  // 增加 targetSource 参数，指定目标平台
+  // 核心执行方法
   async execute(method, params = {}, targetSource = 'kw') {
     if (!this.vm) await this.validate();
     await this.waitForHandler();
 
+    // 修复：将 getTopListDetail 映射为 board，这是 LX 源的标准指令
     const actionMap = {
       'search': 'musicSearch',
       'getMusicUrl': 'musicUrl',
-      'getTopList': 'getTopList',
-      'getTopListDetail': 'getTopListDetail', 
+      'getTopListDetail': 'board', // <--- 关键修改
       'getLyric': 'lyric',
       'getPic': 'pic'
     };
@@ -127,7 +126,7 @@ class SourceParser {
       (async () => {
         try {
           if (lx._handlers && typeof lx._handlers['request'] === 'function') {
-             // 构造 source 对象，告诉脚本目标平台 (如 wy, qq)
+             // 构造 source 对象
              const source = { id: '${targetSource}', name: '${targetSource}', _is_built_in: true };
              return await lx._handlers['request']({ 
                  action: '${action}', 
@@ -150,16 +149,14 @@ class SourceParser {
     return res;
   }
 
-  // 方法包装，传入 targetSource
+  // API 包装
   search(keyword, page, limit) { return this.execute('search', { keyword, page, limit }, 'all'); }
-  
-  // 这里的 musicInfo.source 即为目标平台 ID
   getMusicUrl(musicInfo) { return this.execute('getMusicUrl', { musicInfo }, musicInfo.source); }
   getLyric(musicInfo) { return this.execute('getLyric', { musicInfo }, musicInfo.source); }
   getPic(musicInfo) { return this.execute('getPic', { musicInfo }, musicInfo.source); }
   
-  // 获取榜单详情时，sourceId 即为平台 ID (wy/qq/...)
   getTopListDetail(sourceId, topListId, page, limit) {
+    // 这里的 id 必须传给脚本，脚本通常用 id 字段识别榜单ID
     return this.execute('getTopListDetail', { id: topListId, page, limit }, sourceId);
   }
 }
