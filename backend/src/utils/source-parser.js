@@ -44,13 +44,13 @@ class SourceParser {
         md5: (text) => crypto.createHash('md5').update(text).digest('hex'),
         base64Encode: (text) => Buffer.from(text).toString('base64'),
         base64Decode: (text) => Buffer.from(text, 'base64').toString('utf-8'),
-        aesEncrypt: () => '', // 简易占位
+        aesEncrypt: () => '', 
       },
       data: { set: () => {}, get: () => null }
     };
 
     return {
-      console: { log: () => {}, error: console.error }, // 减少日志噪音
+      console: { log: () => {}, error: console.error },
       globalThis: { lx: lxContext },
       lx: lxContext,
       JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Buffer, Promise,
@@ -70,7 +70,7 @@ class SourceParser {
       };
       if (options.body) config.data = options.body;
       if (options.form) config.data = options.form;
-      // 关键：伪装成安卓客户端，提高成功率
+      // 模拟移动端 UA，提高成功率
       config.headers['User-Agent'] = 'Mozilla/5.0 (Linux; Android 10; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36';
       
       const response = await axios(config);
@@ -106,7 +106,7 @@ class SourceParser {
     return false;
   }
 
-  // 核心执行方法：增加 targetSource 参数
+  // 增加 targetSource 参数，指定目标平台
   async execute(method, params = {}, targetSource = 'kw') {
     if (!this.vm) await this.validate();
     await this.waitForHandler();
@@ -115,7 +115,9 @@ class SourceParser {
       'search': 'musicSearch',
       'getMusicUrl': 'musicUrl',
       'getTopList': 'getTopList',
-      'getTopListDetail': 'getTopListDetail', // 关键方法
+      'getTopListDetail': 'getTopListDetail', 
+      'getLyric': 'lyric',
+      'getPic': 'pic'
     };
     
     const action = actionMap[method] || method;
@@ -125,7 +127,7 @@ class SourceParser {
       (async () => {
         try {
           if (lx._handlers && typeof lx._handlers['request'] === 'function') {
-             // 关键：告诉脚本我们要访问哪个平台 (targetSource)
+             // 构造 source 对象，告诉脚本目标平台 (如 wy, qq)
              const source = { id: '${targetSource}', name: '${targetSource}', _is_built_in: true };
              return await lx._handlers['request']({ 
                  action: '${action}', 
@@ -148,11 +150,15 @@ class SourceParser {
     return res;
   }
 
-  // API 包装
+  // 方法包装，传入 targetSource
   search(keyword, page, limit) { return this.execute('search', { keyword, page, limit }, 'all'); }
-  getMusicUrl(musicInfo) { return this.execute('getMusicUrl', { musicInfo }, musicInfo.source); }
   
-  // 榜单详情：明确指定平台 ID (如 wy, qq)
+  // 这里的 musicInfo.source 即为目标平台 ID
+  getMusicUrl(musicInfo) { return this.execute('getMusicUrl', { musicInfo }, musicInfo.source); }
+  getLyric(musicInfo) { return this.execute('getLyric', { musicInfo }, musicInfo.source); }
+  getPic(musicInfo) { return this.execute('getPic', { musicInfo }, musicInfo.source); }
+  
+  // 获取榜单详情时，sourceId 即为平台 ID (wy/qq/...)
   getTopListDetail(sourceId, topListId, page, limit) {
     return this.execute('getTopListDetail', { id: topListId, page, limit }, sourceId);
   }
