@@ -2,8 +2,7 @@
 const express = require('express');
 const SourceParser = require('../utils/source-parser');
 
-// 内置的榜单结构
-// 关键修正：sourceId 必须符合 LX 源规范 (wy, tx, kg, kw, mg)
+// 内置榜单结构 (ID 必须与 LX 源协议一致: wy, tx, kg, kw, mg)
 const BUILT_IN_RANKINGS = [
   {
     sourceId: 'wy', // 网易云
@@ -16,7 +15,7 @@ const BUILT_IN_RANKINGS = [
     ]
   },
   {
-    sourceId: 'tx', // 修正：从 qq 改为 tx (Tencent)
+    sourceId: 'tx', // 修正：必须是 tx (Tencent)，不能是 qq
     sourceName: 'QQ音乐',
     list: [
       { id: '62', name: '飙升榜' },
@@ -46,12 +45,12 @@ const BUILT_IN_RANKINGS = [
 module.exports = (db) => {
   const router = express.Router();
 
-  // 获取排行榜列表 (静态)
+  // 1. 获取排行榜列表 (静态返回)
   router.get('/ranking/list', (req, res) => {
     res.json({ sources: BUILT_IN_RANKINGS });
   });
 
-  // 获取榜单详情 (动态解析)
+  // 2. 获取榜单详情 (动态解析)
   router.get('/ranking/:sourceId/:topListId', async (req, res, next) => {
     try {
       const { sourceId, topListId } = req.params;
@@ -63,7 +62,6 @@ module.exports = (db) => {
         return res.json({ 
           list: [], 
           total: 0, 
-          sourceId, 
           error: '请先添加并启用自定义源' 
         });
       }
@@ -71,7 +69,7 @@ module.exports = (db) => {
       let result = null;
       let lastError = null;
 
-      // 遍历所有源尝试解析
+      // 遍历所有源，尝试解析
       for (const source of sources) {
         try {
           const parser = new SourceParser(source.script);
@@ -81,6 +79,8 @@ module.exports = (db) => {
           if (data && data.list && data.list.length > 0) {
             result = data;
             break;
+          } else if (data && data.list && data.list.length === 0) {
+             lastError = "源返回了空列表 (可能是IP被限制或脚本不支持该榜单)";
           }
         } catch (err) {
           lastError = err.message;
@@ -97,10 +97,11 @@ module.exports = (db) => {
           list: result.list
         });
       } else {
+        // 返回具体错误，不再是静默空白
         res.json({
           list: [],
           total: 0,
-          error: `获取失败: ${lastError || '源未返回数据'}`
+          error: `获取失败: ${lastError || '未知错误'}`
         });
       }
     } catch (err) {
@@ -108,42 +109,7 @@ module.exports = (db) => {
     }
   });
 
-  // 获取播放地址
-  router.post('/url', async (req, res, next) => {
-    try {
-      const { musicInfo, quality = '128k' } = req.body;
-      const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
-      
-      if (sources.length === 0) return res.status(404).json({ error: 'No enabled sources' });
-
-      // 修正：确保 source 字段正确
-      if (!musicInfo.source && req.body.sourceId) {
-        musicInfo.source = req.body.sourceId;
-      }
-      // 修正：如果是内置榜单的 sourceId (tx/wy等)，需要保留，不要被覆盖为 custom
-      // 但聚合源通常需要 musicInfo.source 指向目标平台
-
-      let urlInfo = null;
-      for (const source of sources) {
-        try {
-          const parser = new SourceParser(source.script);
-          const result = await parser.getMusicUrl(musicInfo, quality);
-          if (result && result.url) {
-            urlInfo = result;
-            break;
-          }
-        } catch (e) {}
-      }
-
-      if (!urlInfo) throw new Error('无法解析播放地址');
-      
-      res.json({ sourceId: 'custom', ...urlInfo });
-    } catch (err) {
-      res.json({ url: null, error: err.message });
-    }
-  });
-
-  // 搜索接口
+  // 3. 搜索接口
   router.post('/search', async (req, res, next) => {
     try {
       const { keyword, page = 1, limit = 30 } = req.body;
@@ -174,6 +140,39 @@ module.exports = (db) => {
     }
   });
 
+  // 4. 获取播放地址
+  router.post('/url', async (req, res, next) => {
+    try {
+      const { musicInfo, quality = '128k' } = req.body;
+      const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
+      
+      if (sources.length === 0) return res.status(404).json({ error: 'No enabled sources' });
+
+      // 修正：确保传递正确的 sourceId (比如 'wy', 'tx')
+      if (!musicInfo.source && req.body.sourceId) {
+        musicInfo.source = req.body.sourceId;
+      }
+
+      let urlInfo = null;
+      for (const source of sources) {
+        try {
+          const parser = new SourceParser(source.script);
+          const result = await parser.getMusicUrl(musicInfo, quality);
+          if (result && result.url) {
+            urlInfo = result;
+            break;
+          }
+        } catch (e) {}
+      }
+
+      if (!urlInfo) throw new Error('无法解析播放地址');
+      
+      res.json({ sourceId: 'custom', ...urlInfo });
+    } catch (err) {
+      res.json({ url: null, error: err.message });
+    }
+  });
+
   // 歌词接口
   router.post('/lyric', async (req, res, next) => {
     try {
@@ -181,17 +180,13 @@ module.exports = (db) => {
       if (!musicInfo.source && req.body.sourceId) musicInfo.source = req.body.sourceId;
       
       const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
-      if (sources.length === 0) return res.json({ lyric: '' });
-
       let lyricInfo = null;
+      
       for (const source of sources) {
         try {
           const parser = new SourceParser(source.script);
           const result = await parser.getLyric(musicInfo);
-          if (result && (result.lyric || result.lrc)) {
-            lyricInfo = result;
-            break;
-          }
+          if (result) { lyricInfo = result; break; }
         } catch (e) {}
       }
       res.json({ sourceId: 'custom', lyric: lyricInfo?.lyric || lyricInfo?.lrc || '', tlyric: lyricInfo?.tlyric || '' });
@@ -203,19 +198,13 @@ module.exports = (db) => {
     try {
       const { musicInfo } = req.body;
       if (!musicInfo.source && req.body.sourceId) musicInfo.source = req.body.sourceId;
-
       const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
-      if (sources.length === 0) return res.json({ pic: null });
-
       let picUrl = null;
       for (const source of sources) {
         try {
           const parser = new SourceParser(source.script);
           const result = await parser.getPic(musicInfo);
-          if (result) {
-            picUrl = result;
-            break;
-          }
+          if (result) { picUrl = result; break; }
         } catch (e) {}
       }
       res.json({ sourceId: 'custom', pic: picUrl });
