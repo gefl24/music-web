@@ -28,7 +28,7 @@ RUN mkdir -p /app/data/sources /app/data/downloads /app/logs /run/nginx /var/log
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
-EXPOSE 80
+EXPOSE 8080
 
 USER node
 
