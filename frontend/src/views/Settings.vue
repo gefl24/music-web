@@ -4,9 +4,24 @@
       <template #header>
         <div class="header">
           <span>自定义音乐源管理</span>
-          <el-button type="primary" @click="showAddDialog = true">
-            添加源
-          </el-button>
+          <div class="header-actions">
+            <input
+              type="file"
+              ref="fileInput"
+              style="display: none"
+              accept=".js,.json,.txt"
+              @change="handleFileChange"
+            >
+            <el-button @click="showUrlDialog = true">
+              网络导入
+            </el-button>
+            <el-button @click="triggerLocalImport">
+              本地导入
+            </el-button>
+            <el-button type="primary" @click="openAddDialog">
+              添加源
+            </el-button>
+          </div>
         </div>
       </template>
 
@@ -39,11 +54,37 @@
       </el-table>
     </el-card>
 
-    <!-- 添加/编辑对话框 -->
+    <el-dialog v-model="showUrlDialog" title="从网络导入" width="500px">
+      <el-form @submit.prevent="handleUrlImport">
+        <el-form-item label="脚本链接">
+          <el-input 
+            v-model="importUrl" 
+            placeholder="请输入 .js 或 .json 的链接 (如 GitHub Raw 链接)" 
+            clearable
+          />
+        </el-form-item>
+        <div class="url-tip">
+          提示：将使用服务器代理请求以解决跨域问题
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="showUrlDialog = false">取消</el-button>
+        <el-button 
+          type="primary" 
+          :loading="importing" 
+          @click="handleUrlImport"
+          :disabled="!importUrl"
+        >
+          导入
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog
       v-model="showAddDialog"
       :title="editingSource ? '编辑源' : '添加源'"
       width="800px"
+      :close-on-click-modal="false"
     >
       <el-form :model="form" label-width="100px">
         <el-form-item label="源名称">
@@ -60,7 +101,7 @@
             v-model="form.script"
             type="textarea"
             :rows="15"
-            placeholder="请输入源脚本代码"
+            placeholder="请输入源脚本代码，或使用上方导入功能"
           />
         </el-form-item>
       </el-form>
@@ -76,11 +117,16 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSourceStore } from '../stores/source'
+import { sourceApi } from '../api/source'
 
 const sourceStore = useSourceStore()
 
 const showAddDialog = ref(false)
+const showUrlDialog = ref(false)
+const importing = ref(false)
+const importUrl = ref('')
 const editingSource = ref<any>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
 
 const form = reactive({
   name: '',
@@ -100,6 +146,104 @@ function resetForm() {
   form.script = ''
   editingSource.value = null
 }
+
+function openAddDialog() {
+  resetForm()
+  showAddDialog.value = true
+}
+
+// ---------------- 导入逻辑开始 ----------------
+
+// 通用：处理脚本内容并填充表单
+function processScriptContent(content: string, filenameHint?: string) {
+  resetForm()
+  
+  let importedName = ''
+  let importedScript = content
+  
+  // 1. 尝试解析 JSON
+  try {
+    // 只有当内容看起来像 JSON 时才尝试解析
+    if (content.trim().startsWith('{')) {
+      const json = JSON.parse(content)
+      // 兼容常见 JSON 结构
+      if (json.name || json.sourceName) {
+        importedName = json.name || json.sourceName
+        importedScript = json.script || (typeof json.source === 'string' ? json.source : content)
+        if (json.type) form.type = json.type
+      }
+    }
+  } catch (e) {
+    // 忽略 JSON 解析错误，视为普通 JS
+  }
+
+  // 2. 如果没找到名字，尝试从 JS 注释提取 (@name MySource)
+  if (!importedName) {
+    const nameMatch = importedScript.match(/@name\s+([^\n\r*]+)/)
+    if (nameMatch && nameMatch[1]) {
+      importedName = nameMatch[1].trim()
+    }
+  }
+
+  // 3. 最后使用文件名作为后备
+  if (!importedName && filenameHint) {
+    importedName = filenameHint.replace(/\.[^/.]+$/, "") // 去除后缀
+  }
+
+  form.name = importedName || 'New Source'
+  form.script = importedScript
+  
+  showAddDialog.value = true
+}
+
+// 本地文件导入
+function triggerLocalImport() {
+  fileInput.value?.click()
+}
+
+async function handleFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = input.files
+  
+  if (!files || files.length === 0) return
+
+  const file = files[0]
+  try {
+    const content = await file.text()
+    processScriptContent(content, file.name)
+    ElMessage.success(`已加载文件: ${file.name}`)
+  } catch (error) {
+    console.error('File read error:', error)
+    ElMessage.error('读取文件失败')
+  } finally {
+    input.value = ''
+  }
+}
+
+// 网络链接导入
+async function handleUrlImport() {
+  if (!importUrl.value) return
+  
+  importing.value = true
+  try {
+    const result = await sourceApi.importFromUrl(importUrl.value)
+    
+    // 从 URL 中提取文件名作为提示
+    const urlFilename = importUrl.value.split('/').pop() || 'network-source'
+    
+    showUrlDialog.value = false
+    importUrl.value = '' // 清空输入
+    processScriptContent(result.content, urlFilename)
+    
+    ElMessage.success('脚本下载成功，请确认信息后保存')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '导入失败，请检查链接或网络')
+  } finally {
+    importing.value = false
+  }
+}
+
+// ---------------- 导入逻辑结束 ----------------
 
 function handleEdit(source: any) {
   editingSource.value = source
@@ -184,5 +328,16 @@ function formatDate(date: string) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.url-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 5px;
 }
 </style>
