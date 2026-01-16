@@ -112,6 +112,7 @@ function broadcastDownloadProgress(downloadId, data) {
 
 // 导入路由模块 (但暂时不注册)
 const sourceRoutes = require('./routes/source.routes');
+const platformRoutes = require('./routes/platform.routes');
 const musicRoutes = require('./routes/music.routes');
 const downloadRoutes = require('./routes/download.routes');
 
@@ -126,7 +127,13 @@ async function start() {
     // 2. 数据库就绪后，再注册路由，传入有效的 db 对象
     console.log('Mounting routes...');
     app.use('/api/sources', sourceRoutes(db));
+    
+    // 新增：平台 API (排行榜/搜索) - 不依赖数据库源
+    app.use('/api/platform', platformRoutes); 
+    
+    // 修改：音乐操作 API (播放/下载) - 依赖数据库源解析
     app.use('/api/music', musicRoutes(db));
+    
     app.use('/api/downloads', downloadRoutes(db, broadcastDownloadProgress));
 
     // 3. 注册其他基础路由
