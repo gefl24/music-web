@@ -23,11 +23,13 @@ export default defineConfig({
       }
     }
   },
+
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: false,
-    minify: 'terser',
+    minify: 'esbuild', // <--- 修改这里：从 'terser' 改为 'esbuild'
     chunkSizeWarningLimit: 1500
   }
+
 })
