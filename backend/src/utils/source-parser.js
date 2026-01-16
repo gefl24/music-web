@@ -70,6 +70,7 @@ class SourceParser {
       };
       if (options.body) config.data = options.body;
       if (options.form) config.data = options.form;
+      // 模拟安卓客户端 UA，增加成功率
       config.headers['User-Agent'] = 'Mozilla/5.0 (Linux; Android 10; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36';
       
       const response = await axios(config);
@@ -105,16 +106,16 @@ class SourceParser {
     return false;
   }
 
-  // 核心执行方法
+  // 增加 targetSource 参数，指定目标平台
   async execute(method, params = {}, targetSource = 'kw') {
     if (!this.vm) await this.validate();
     await this.waitForHandler();
 
-    // 修复：将 getTopListDetail 映射为 board，这是 LX 源的标准指令
+    // 关键映射修正：getTopListDetail -> board
     const actionMap = {
       'search': 'musicSearch',
       'getMusicUrl': 'musicUrl',
-      'getTopListDetail': 'board', // <--- 关键修改
+      'getTopListDetail': 'board', // <--- 必须是 board
       'getLyric': 'lyric',
       'getPic': 'pic'
     };
@@ -126,7 +127,7 @@ class SourceParser {
       (async () => {
         try {
           if (lx._handlers && typeof lx._handlers['request'] === 'function') {
-             // 构造 source 对象
+             // 构造 source 对象，告诉脚本目标平台 (如 wy, tx)
              const source = { id: '${targetSource}', name: '${targetSource}', _is_built_in: true };
              return await lx._handlers['request']({ 
                  action: '${action}', 
@@ -155,8 +156,8 @@ class SourceParser {
   getLyric(musicInfo) { return this.execute('getLyric', { musicInfo }, musicInfo.source); }
   getPic(musicInfo) { return this.execute('getPic', { musicInfo }, musicInfo.source); }
   
+  // 这里的 sourceId 就是 wy, tx 等
   getTopListDetail(sourceId, topListId, page, limit) {
-    // 这里的 id 必须传给脚本，脚本通常用 id 字段识别榜单ID
     return this.execute('getTopListDetail', { id: topListId, page, limit }, sourceId);
   }
 }
