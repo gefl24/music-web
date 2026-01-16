@@ -10,12 +10,9 @@ class SourceParser {
     this.vm = null;
   }
 
-  // 创建兼容桌面版的沙箱环境
   createSandbox() {
     const self = this;
     
-    // 构造 lx 上下文
-    // 关键修正1: _handlers 必须定义在 context 内部，让 on 方法能写入，且沙箱能读取
     const lxContext = {
       _handlers: {}, 
       
@@ -27,24 +24,18 @@ class SourceParser {
         version: '1.0.0'
       },
 
-      // 事件常量
       EVENT_NAMES: {
         request: 'request',
         inited: 'inited',
         updateAlert: 'updateAlert'
       },
 
-      // 关键修正2: on 方法直接将 handler 存入 lxContext._handlers
       on: (eventName, handler) => {
         lxContext._handlers[eventName] = handler;
       },
 
-      // 消息发送 (占位)
-      send: (eventName, data) => {
-        return Promise.resolve();
-      },
+      send: (eventName, data) => Promise.resolve(),
 
-      // 网络请求 (同时支持 Callback 和 Promise)
       request: (url, options, callback) => {
         let cb = callback;
         if (typeof options === 'function') {
@@ -70,12 +61,8 @@ class SourceParser {
         return promise;
       },
 
-      // 基础 Fetch
-      fetch: async (url, options = {}) => {
-        return self.safeFetch(url, options);
-      },
+      fetch: async (url, options = {}) => self.safeFetch(url, options),
 
-      // 加密工具
       crypto: {
         md5: (text) => crypto.createHash('md5').update(text).digest('hex'),
         sha1: (text) => crypto.createHash('sha1').update(text).digest('hex'),
@@ -85,7 +72,6 @@ class SourceParser {
         aesEncrypt: (text, key, iv, mode) => '', 
       },
 
-      // 工具函数
       utils: {
         parseJSON: (text) => JSON.parse(text),
         stringifyJSON: (obj) => JSON.stringify(obj),
@@ -108,11 +94,10 @@ class SourceParser {
       globalThis: { lx: lxContext },
       lx: lxContext,
       JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Buffer, Promise,
-      setTimeout: undefined, setInterval: undefined
+      setTimeout, setInterval, clearTimeout, clearInterval // 允许脚本使用定时器以便异步操作
     };
   }
 
-  // 安全请求封装
   async safeFetch(url, options = {}) {
     const config = {
       url,
@@ -126,9 +111,8 @@ class SourceParser {
     if (options.body) config.data = options.body;
     if (options.form) config.data = options.form;
 
-    if (!config.headers['User-Agent']) {
-      config.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36';
-    }
+    // 很多聚合源检查 User-Agent
+    config.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36';
 
     try {
       const response = await axios(config);
@@ -142,18 +126,10 @@ class SourceParser {
         ok: response.status >= 200 && response.status < 300
       };
     } catch (error) {
-      // 即使失败也返回结构，防止脚本解构报错
-      return {
-          ok: false,
-          status: 500,
-          body: null,
-          data: null,
-          error: error.message
-      }
+      return { ok: false, status: 500, body: null, error: error.message };
     }
   }
 
-  // 验证脚本
   async validate() {
     this.vm = new VM({ timeout: this.timeout, sandbox: this.createSandbox() });
     try {
@@ -163,11 +139,24 @@ class SourceParser {
     }
   }
 
-  // 执行方法
+  // 新增：等待脚本注册事件（解决异步初始化问题）
+  async waitForHandler(action, maxWait = 3000) {
+    const start = Date.now();
+    while (Date.now() - start < maxWait) {
+      // 检查沙箱内是否有 handler
+      const hasHandler = this.vm.run(`!!(lx._handlers && lx._handlers['request'])`);
+      if (hasHandler) return true;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    return false;
+  }
+
   async execute(method, params = {}) {
     if (!this.vm) await this.validate();
 
-    // 映射方法名
+    // 等待脚本初始化完成 (最多等待3秒)
+    await this.waitForHandler('request');
+
     const actionMap = {
       'search': 'musicSearch',
       'getMusicUrl': 'musicUrl',
@@ -178,24 +167,32 @@ class SourceParser {
     
     const action = actionMap[method] || method;
 
-    // 关键修正3: 调用 handler 时传递 单个对象参数 { action, source, info }
-    // 这是 LX Music 桌面版源的标准协议
+    // 补全参数，防止脚本报错
+    const fullParams = {
+        page: 1,
+        limit: 30, // 很多脚本没有 limit 会崩溃
+        type: 'music',
+        ...params
+    };
+
     const code = `
       (async () => {
-        if (lx._handlers && typeof lx._handlers['request'] === 'function') {
-           const source = { id: 'custom', name: 'CustomSource' };
-           // 修正此处：将参数包装为对象
-           return await lx._handlers['request']({ 
-               action: '${action}', 
-               source: source, 
-               info: ${JSON.stringify(params)} 
-           });
+        try {
+          if (lx._handlers && typeof lx._handlers['request'] === 'function') {
+             const source = { id: 'custom', name: 'CustomSource' };
+             return await lx._handlers['request']({ 
+                 action: '${action}', 
+                 source: source, 
+                 info: ${JSON.stringify(fullParams)} 
+             });
+          }
+          
+          if (typeof ${method} === 'function') {
+            return await ${method}(${JSON.stringify(fullParams)});
+          }
+        } catch (err) {
+          return { error: err.message };
         }
-        
-        if (typeof ${method} === 'function') {
-          return await ${method}(${JSON.stringify(params)});
-        }
-        
         return null;
       })();
     `;
