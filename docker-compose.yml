@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  lx-music-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lx-music-web
+    ports:
+      - "8080:80"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./downloads:/app/data/downloads
+    environment:
+      - NODE_ENV=production
+      - API_PORT=3000
+      - MAX_DOWNLOAD_CONCURRENT=3
+      - DOWNLOAD_SPEED_LIMIT=0
+      - DATABASE_PATH=/app/data/database.sqlite
+      - LOG_LEVEL=info
+      - CORS_ORIGIN=*
+      - SESSION_SECRET=change-this-secret-key
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - lx-music-network
+
+networks:
+  lx-music-network:
+    driver: bridge
