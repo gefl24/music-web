@@ -42,15 +42,18 @@ const BUILT_IN_RANKINGS = [
   }
 ];
 
+// backend/src/routes/music.routes.js
+// ... (保留顶部的 BUILT_IN_RANKINGS 定义)
+
 module.exports = (db) => {
   const router = express.Router();
 
-  // 1. 获取排行榜列表 (静态返回)
+  // 1. 获取排行榜列表
   router.get('/ranking/list', (req, res) => {
     res.json({ sources: BUILT_IN_RANKINGS });
   });
 
-  // 2. 获取榜单详情 (动态解析)
+  // 2. 获取榜单详情
   router.get('/ranking/:sourceId/:topListId', async (req, res, next) => {
     try {
       const { sourceId, topListId } = req.params;
@@ -59,31 +62,26 @@ module.exports = (db) => {
       const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
       
       if (sources.length === 0) {
-        return res.json({ 
-          list: [], 
-          total: 0, 
-          error: '请先添加并启用自定义源' 
-        });
+        return res.json({ list: [], total: 0, error: '请先添加并启用自定义源' });
       }
 
       let result = null;
-      let lastError = null;
+      let errors = [];
 
-      // 遍历所有源，尝试解析
       for (const source of sources) {
         try {
           const parser = new SourceParser(source.script);
-          // 调用 board 动作
           const data = await parser.getTopListDetail(sourceId, topListId, parseInt(page), parseInt(limit));
           
+          // 只有当返回了有效的列表数据时，才认为是成功
           if (data && data.list && data.list.length > 0) {
             result = data;
-            break;
-          } else if (data && data.list && data.list.length === 0) {
-             lastError = "源返回了空列表 (可能是IP被限制或脚本不支持该榜单)";
+            break; // 找到数据，退出循环
           }
         } catch (err) {
-          lastError = err.message;
+          // 记录错误但继续尝试下一个源
+          // console.error(`Source ${source.name} failed:`, err.message);
+          errors.push(`${source.name}: ${err.message}`);
         }
       }
 
@@ -97,11 +95,10 @@ module.exports = (db) => {
           list: result.list
         });
       } else {
-        // 返回具体错误，不再是静默空白
         res.json({
           list: [],
           total: 0,
-          error: `获取失败: ${lastError || '未知错误'}`
+          error: `获取失败，已尝试 ${sources.length} 个源。错误详情: ${errors.join('; ')}`
         });
       }
     } catch (err) {
