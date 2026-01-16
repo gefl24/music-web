@@ -2,7 +2,10 @@
 const express = require('express');
 const SourceParser = require('../utils/source-parser');
 
-// 内置的榜单结构 (模拟 LX Desktop 的内置源)
+// ==========================================
+// 1. 内置主流榜单列表 (静态数据)
+// ==========================================
+// 这些数据结构与 LX Music 客户端保持一致，ID 对应各平台的真实榜单 ID
 const BUILT_IN_RANKINGS = [
   {
     sourceId: 'wy',
@@ -18,10 +21,10 @@ const BUILT_IN_RANKINGS = [
     sourceId: 'qq',
     sourceName: 'QQ音乐',
     list: [
-      { id: '4', name: '流行指数榜' },
+      { id: '62', name: '飙升榜' },
       { id: '26', name: '热歌榜' },
       { id: '27', name: '新歌榜' },
-      { id: '62', name: '飙升榜' }
+      { id: '4', name: '流行指数榜' }
     ]
   },
   {
@@ -45,18 +48,24 @@ const BUILT_IN_RANKINGS = [
 module.exports = (db) => {
   const router = express.Router();
 
-  // 1. 获取排行榜列表：直接返回内置列表 (无需自定义源也显示)
+  // ==========================================
+  // 接口 1: 获取排行榜列表
+  // 逻辑: 直接返回内置列表，不依赖任何自定义源
+  // ==========================================
   router.get('/ranking/list', (req, res) => {
     res.json({ sources: BUILT_IN_RANKINGS });
   });
 
-  // 2. 获取排行榜详情
+  // ==========================================
+  // 接口 2: 获取榜单内的歌曲详情
+  // 逻辑: 遍历所有启用的源，找到能解析该平台(sourceId)的源
+  // ==========================================
   router.get('/ranking/:sourceId/:topListId', async (req, res, next) => {
     try {
       const { sourceId, topListId } = req.params;
       const { page = 1, limit = 30 } = req.query;
 
-      // 寻找可用的自定义源来解析数据
+      // 获取所有启用的自定义源
       const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
       
       if (sources.length === 0) {
@@ -64,27 +73,26 @@ module.exports = (db) => {
           list: [], 
           total: 0, 
           sourceId, 
-          error: '请先添加并启用自定义源以获取榜单数据' 
+          error: '请先在设置中添加并启用自定义源' 
         });
       }
 
       let result = null;
       let lastError = null;
 
-      // 遍历所有源，尝试解析
+      // 遍历源进行尝试
       for (const source of sources) {
         try {
           const parser = new SourceParser(source.script);
-          // 告诉源：我要获取 sourceId (比如 wy) 平台的 topListId 榜单
+          // 关键：告诉源我们要获取哪个平台(sourceId)的哪个榜单(topListId)
           const data = await parser.getTopListDetail(sourceId, topListId, parseInt(page), parseInt(limit));
           
           if (data && data.list && data.list.length > 0) {
             result = data;
-            break; // 成功获取，跳出循环
+            break; // 成功获取，停止遍历
           }
         } catch (err) {
           lastError = err.message;
-          // 继续尝试下一个源
         }
       }
 
@@ -101,7 +109,7 @@ module.exports = (db) => {
         res.json({
           list: [],
           total: 0,
-          error: `获取失败，请检查自定义源是否支持。最后错误: ${lastError}`
+          error: `获取失败 (最后错误: ${lastError})`
         });
       }
     } catch (err) {
@@ -109,7 +117,47 @@ module.exports = (db) => {
     }
   });
 
-  // 3. 搜索音乐 (逻辑保持不变，但优化错误处理)
+  // ==========================================
+  // 接口 3: 获取单一歌曲详情 (播放链接/歌词/封面)
+  // 逻辑: 遍历源，解析 musicInfo
+  // ==========================================
+  router.post('/url', async (req, res, next) => {
+    try {
+      const { musicInfo, quality = '128k' } = req.body;
+      const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
+      
+      if (sources.length === 0) return res.status(404).json({ error: 'No enabled sources' });
+
+      let urlInfo = null;
+
+      // 确保 musicInfo 中包含 source 属性 (用于告诉脚本去哪个平台解析)
+      if (!musicInfo.source && req.body.sourceId) {
+        musicInfo.source = req.body.sourceId;
+      }
+
+      for (const source of sources) {
+        try {
+          const parser = new SourceParser(source.script);
+          const result = await parser.getMusicUrl(musicInfo, quality);
+          if (result && result.url) {
+            urlInfo = result;
+            break;
+          }
+        } catch (e) {
+          // 忽略单个源的失败，继续尝试下一个
+        }
+      }
+
+      if (!urlInfo) throw new Error('无法解析播放地址，请检查源是否支持该歌曲');
+      
+      res.json({ sourceId: 'custom', ...urlInfo });
+    } catch (err) {
+      // 返回特定格式以防前端崩溃
+      res.json({ url: null, error: err.message });
+    }
+  });
+
+  // 搜索接口 (保持逻辑: 使用第一个可用源)
   router.post('/search', async (req, res, next) => {
     try {
       const { keyword, page = 1, limit = 30 } = req.body;
@@ -117,8 +165,6 @@ module.exports = (db) => {
 
       if (sources.length === 0) return res.json({ results: [] });
 
-      // 只使用优先级最高的一个源进行搜索 (聚合源通常只需要一个)
-      // 也可以改为并发搜索，但为了稳定性，建议先试第一个
       const bestSource = sources[0];
       try {
         const parser = new SourceParser(bestSource.script);
@@ -129,7 +175,7 @@ module.exports = (db) => {
           page,
           limit,
           results: [{
-            sourceId: 'all', // 聚合搜索通常返回混合结果
+            sourceId: 'all', 
             sourceName: '聚合搜索结果',
             data: result
           }]
@@ -142,34 +188,52 @@ module.exports = (db) => {
     }
   });
 
-  // 4. 获取播放地址 (使用自定义源解析)
-  router.post('/url', async (req, res, next) => {
+  // 歌词接口
+  router.post('/lyric', async (req, res, next) => {
     try {
-      const { musicInfo, quality = '128k' } = req.body;
-      // 优先使用数据库里优先级最高的源
-      const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
+      const { musicInfo } = req.body;
+      if (!musicInfo.source && req.body.sourceId) musicInfo.source = req.body.sourceId;
       
-      if (sources.length === 0) return res.status(404).json({ error: 'No enabled sources' });
+      const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
+      if (sources.length === 0) return res.json({ lyric: '', tlyric: '' });
 
-      let urlInfo = null;
+      let lyricInfo = null;
       for (const source of sources) {
         try {
           const parser = new SourceParser(source.script);
-          const result = await parser.getMusicUrl(musicInfo, quality);
-          if (result && result.url) {
-            urlInfo = result;
+          const result = await parser.getLyric(musicInfo);
+          if (result && (result.lyric || result.lrc)) {
+            lyricInfo = result;
             break;
           }
-        } catch (e) { console.error('Url parse failed:', e.message); }
+        } catch (e) {}
       }
+      res.json({ sourceId: 'custom', lyric: lyricInfo?.lyric || '', tlyric: lyricInfo?.tlyric || '' });
+    } catch(err) { next(err); }
+  });
 
-      if (!urlInfo) throw new Error('无法解析播放地址');
-      
-      res.json({ sourceId: 'custom', ...urlInfo });
-    } catch (err) {
-      // 返回特定结构以避免前端报错
-      res.json({ url: null, error: err.message }); 
-    }
+  // 图片接口
+  router.post('/pic', async (req, res, next) => {
+    try {
+      const { musicInfo } = req.body;
+      if (!musicInfo.source && req.body.sourceId) musicInfo.source = req.body.sourceId;
+
+      const sources = await db.all('SELECT * FROM sources WHERE enabled = 1 ORDER BY priority DESC');
+      if (sources.length === 0) return res.json({ pic: null });
+
+      let picUrl = null;
+      for (const source of sources) {
+        try {
+          const parser = new SourceParser(source.script);
+          const result = await parser.getPic(musicInfo);
+          if (result) {
+            picUrl = result;
+            break;
+          }
+        } catch (e) {}
+      }
+      res.json({ sourceId: 'custom', pic: picUrl });
+    } catch(err) { next(err); }
   });
 
   return router;
