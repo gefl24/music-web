@@ -65,7 +65,7 @@ RUN mkdir -p \
 EXPOSE 80
 
 # 切换到 node 用户
-USER node
+# USER node
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
