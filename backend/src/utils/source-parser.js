@@ -10,11 +10,12 @@ class SourceParser {
     this.vm = null;
   }
 
+  // 1. 创建增强版沙箱 (支持 lx.on 和 lx.request)
   createSandbox() {
     const self = this;
     
     const lxContext = {
-      _handlers: {}, 
+      _handlers: {}, // 内部存储事件处理器
       
       version: '2.0.0',
       env: 'mobile',
@@ -30,12 +31,14 @@ class SourceParser {
         updateAlert: 'updateAlert'
       },
 
+      // 关键：捕获脚本注册的事件
       on: (eventName, handler) => {
         lxContext._handlers[eventName] = handler;
       },
 
       send: (eventName, data) => Promise.resolve(),
 
+      // 关键：request 方法支持 Callback 和 Promise 两种风格
       request: (url, options, callback) => {
         let cb = callback;
         if (typeof options === 'function') {
@@ -94,10 +97,11 @@ class SourceParser {
       globalThis: { lx: lxContext },
       lx: lxContext,
       JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Buffer, Promise,
-      setTimeout, setInterval, clearTimeout, clearInterval // 允许脚本使用定时器以便异步操作
+      setTimeout, setInterval, clearTimeout, clearInterval
     };
   }
 
+  // 2. 安全的网络请求
   async safeFetch(url, options = {}) {
     const config = {
       url,
@@ -111,7 +115,7 @@ class SourceParser {
     if (options.body) config.data = options.body;
     if (options.form) config.data = options.form;
 
-    // 很多聚合源检查 User-Agent
+    // 伪装 UA
     config.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36';
 
     try {
@@ -130,20 +134,22 @@ class SourceParser {
     }
   }
 
+  // 3. 初始化验证
   async validate() {
     this.vm = new VM({ timeout: this.timeout, sandbox: this.createSandbox() });
     try {
+        // 初始化 handlers 容器
+        this.vm.run('if(!lx._handlers) lx._handlers={}');
         return this.vm.run(this.script);
     } catch (e) {
         throw new Error(`Script Init Failed: ${e.message}`);
     }
   }
 
-  // 新增：等待脚本注册事件（解决异步初始化问题）
+  // 4. 等待脚本异步初始化 (解决 Test Failed)
   async waitForHandler(action, maxWait = 3000) {
     const start = Date.now();
     while (Date.now() - start < maxWait) {
-      // 检查沙箱内是否有 handler
       const hasHandler = this.vm.run(`!!(lx._handlers && lx._handlers['request'])`);
       if (hasHandler) return true;
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -151,10 +157,11 @@ class SourceParser {
     return false;
   }
 
+  // 5. 核心执行逻辑
   async execute(method, params = {}) {
     if (!this.vm) await this.validate();
 
-    // 等待脚本初始化完成 (最多等待3秒)
+    // 等待脚本准备就绪
     await this.waitForHandler('request');
 
     const actionMap = {
@@ -162,15 +169,16 @@ class SourceParser {
       'getMusicUrl': 'musicUrl',
       'getTopList': 'getTopList',
       'getLyric': 'lyric',
-      'getPic': 'pic'
+      'getPic': 'pic',
+      'getTopListDetail': 'getTopListDetail'
     };
     
     const action = actionMap[method] || method;
 
-    // 补全参数，防止脚本报错
+    // 补全默认参数
     const fullParams = {
         page: 1,
-        limit: 30, // 很多脚本没有 limit 会崩溃
+        limit: 30,
         type: 'music',
         ...params
     };
@@ -178,6 +186,7 @@ class SourceParser {
     const code = `
       (async () => {
         try {
+          // 优先使用事件驱动模式 (lx.on)
           if (lx._handlers && typeof lx._handlers['request'] === 'function') {
              const source = { id: 'custom', name: 'CustomSource' };
              return await lx._handlers['request']({ 
@@ -187,6 +196,7 @@ class SourceParser {
              });
           }
           
+          // 降级使用全局函数模式
           if (typeof ${method} === 'function') {
             return await ${method}(${JSON.stringify(fullParams)});
           }
@@ -198,6 +208,34 @@ class SourceParser {
     `;
 
     return this.vm.run(code);
+  }
+
+  // ==========================================
+  // 6. 接口包装方法 (修复 logs 报错的关键)
+  // ==========================================
+
+  async search(keyword, page = 1, limit = 30) {
+    return this.execute('search', { keyword, page, limit });
+  }
+
+  async getTopList() {
+    return this.execute('getTopList');
+  }
+
+  async getTopListDetail(topListId, page = 1, limit = 100) {
+    return this.execute('getTopListDetail', { topListId, page, limit });
+  }
+
+  async getMusicUrl(musicInfo, quality = '128k') {
+    return this.execute('getMusicUrl', { musicInfo, quality });
+  }
+
+  async getLyric(musicInfo) {
+    return this.execute('getLyric', { musicInfo });
+  }
+
+  async getPic(musicInfo) {
+    return this.execute('getPic', { musicInfo });
   }
 }
 
