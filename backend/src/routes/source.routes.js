@@ -1,13 +1,40 @@
 // backend/src/routes/source.routes.js
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
+const axios = require('axios'); // 新增：引入 axios 用于网络请求
 const SourceParser = require('../utils/source-parser');
 
 module.exports = (db) => {
   const router = express.Router();
 
+  // --- 新增代码开始: 获取网络源内容 ---
+  router.get('/import-url', async (req, res, next) => {
+    try {
+      const { url } = req.query;
+      if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+      }
+
+      // 使用 axios 获取外部链接内容
+      const response = await axios.get(url, {
+        timeout: 15000,
+        responseType: 'text', // 强制作为文本处理
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
+
+      res.json({ content: response.data });
+    } catch (err) {
+      console.error('Import URL error:', err.message);
+      res.status(500).json({ error: 'Failed to fetch url', details: err.message });
+    }
+  });
+  // --- 新增代码结束 ---
+
   // 获取所有自定义源
   router.get('/', async (req, res, next) => {
+    // ... 原有代码保持不变 ...
     try {
       const sources = await db.all(
         'SELECT * FROM sources ORDER BY priority DESC, name ASC'
@@ -18,6 +45,8 @@ module.exports = (db) => {
     }
   });
 
+  // ... 保持该文件其他原有路由 (get /:id, post /, put /:id, delete /:id, test, toggle) 不变 ...
+  
   // 获取单个源
   router.get('/:id', async (req, res, next) => {
     try {
