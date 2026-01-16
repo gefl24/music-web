@@ -110,9 +110,9 @@ function broadcastDownloadProgress(downloadId, data) {
   });
 }
 
-// 导入路由模块 (但暂时不注册)
+// 导入路由模块
 const sourceRoutes = require('./routes/source.routes');
-const platformRoutes = require('./routes/platform.routes');
+const platformRoutes = require('./routes/platform.routes'); // 【新增】导入平台路由
 const musicRoutes = require('./routes/music.routes');
 const downloadRoutes = require('./routes/download.routes');
 
@@ -126,14 +126,17 @@ async function start() {
     
     // 2. 数据库就绪后，再注册路由，传入有效的 db 对象
     console.log('Mounting routes...');
+    
+    // 源管理 API
     app.use('/api/sources', sourceRoutes(db));
     
-    // 新增：平台 API (排行榜/搜索) - 不依赖数据库源
-    app.use('/api/platform', platformRoutes); 
+    // 【新增】平台 API (排行榜/搜索) - 负责获取列表数据
+    app.use('/api/platform', platformRoutes(db));
     
-    // 修改：音乐操作 API (播放/下载) - 依赖数据库源解析
+    // 音乐操作 API (播放/图片/歌词) - 负责解析具体 URL
     app.use('/api/music', musicRoutes(db));
     
+    // 下载管理 API
     app.use('/api/downloads', downloadRoutes(db, broadcastDownloadProgress));
 
     // 3. 注册其他基础路由
